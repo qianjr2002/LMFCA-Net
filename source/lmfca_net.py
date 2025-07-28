@@ -211,3 +211,19 @@ class lmfcaNet(nn.Module):
         out = self.lastConv(d1)
 
         return out
+if __name__ == "__main__":
+    # Create a test input tensor (batch_size=2, channels=2, height=128, width=128)
+    test_input = torch.randn(2, 2, 256, 256)
+
+    # Initialize the model
+    model = lmfcaNet(in_ch=2, out_ch=1)
+
+    # Forward pass
+    output = model(test_input)
+
+    # Print input and output shapes
+    print(f"Input shape: {test_input.shape}")
+    print(f"Output shape: {output.shape}")
+
+    # Print min/max values of output
+    print(f"Output min: {output.min().item():.4f}, max: {output.max().item():.4f}")
