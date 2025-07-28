@@ -213,6 +213,82 @@ class lmfcaNet(nn.Module):
         return out
 
 
+def process_variable_length_audio(
+    model, audio, segment_size, n_fft=510, hop=128, win_len=510, device="cuda"
+):
+    """
+    支持 B 条语音输入，每条可能长度不同
+    :param audio: [B, 2, L]
+    :return: [B, 1, L]
+    """
+    B, C, L = audio.shape
+    assert C == 2, "Only supports 2-channel input."
+
+    outputs = []
+
+    for b in range(B):
+        x = audio[b].unsqueeze(0)  # [1, 2, Lb]
+        orig_len = x.shape[-1]
+        segments = []
+        last_len = orig_len % segment_size
+
+        # Step 1: 切片或补零
+        if orig_len >= segment_size:
+            if last_len > 0:
+                last_seg = x[:, :, -segment_size:]
+                x = x[:, :, :-last_len]
+                chunks = torch.split(x, segment_size, dim=2)
+                segments = list(chunks) + [last_seg]
+                reshapelast = True
+            else:
+                segments = list(torch.split(x, segment_size, dim=2))
+                reshapelast = False
+        else:
+            pad = segment_size - orig_len
+            padded_x = F.pad(x, (0, pad))
+            segments = [padded_x]
+            reshapelast = False
+
+        processed = []
+
+        # Step 2: 每段 STFT → 模型 → ISTFT
+        for i, seg in enumerate(segments):
+            wav = seg.to(device)  # [1, 2, segment_size]
+
+            # STFT
+            stft = lambda x: torch.stft(
+                x, n_fft=n_fft, hop_length=hop, win_length=win_len,
+                return_complex=True, center=True, normalized=False
+            )
+            specs = [stft(wav[:, ch]) for ch in range(2)]  # each: [1, F, T]
+            specs = torch.stack(specs, dim=1)  # [1, 2, F, T]
+            real_imag = torch.view_as_real(specs).permute(0, 1, 4, 2, 3)  # [1, 2, 2, F, T]
+            input_spec = real_imag.reshape(1, 4, specs.shape[-2], specs.shape[-1])  # [1, 4, F, T]
+
+            # 模型增强
+            with torch.no_grad():
+                enhanced_spec = model(input_spec)
+
+            # ISTFT
+            real, imag = enhanced_spec[:, 0], enhanced_spec[:, 1]
+            complex_spec = torch.complex(real, imag)
+            wav_out = torch.istft(
+                complex_spec,
+                n_fft=n_fft, hop_length=hop, win_length=win_len,
+                center=True, normalized=False, length=segment_size
+            )  # [1, T]
+            processed.append(wav_out)
+
+        # 拼接所有段
+        full_audio = torch.cat(processed, dim=-1)  # [1, T_all]
+        full_audio = full_audio[:, :orig_len]  # 裁剪到原始长度
+        outputs.append(full_audio)
+
+    # Stack 所有 batch
+    outputs = torch.stack(outputs, dim=0)  # [B, 1, T]
+    return outputs
+
+
  # 音频输入: [B, 2, L]
 def wav2spec(wav, n_fft=510, hop=128, win_len=510):
     stft = lambda x: torch.stft(
@@ -274,3 +350,11 @@ def test_model_complexity_info():
 if __name__ == "__main__":    
     test_lmfcaNet()
     test_model_complexity_info()
+    noisy_wav = torch.randn(16, 2, 19345).to("cuda")
+    model = lmfcaNet(in_ch=4, out_ch=2).to("cuda")
+    model.eval()
+
+    segment_size = (128 - 1) * 128  # = 16256
+
+    est_wav = process_variable_length_audio(model, noisy_wav, segment_size)
+    print(est_wav.shape)  # [16, 1, 19345]
