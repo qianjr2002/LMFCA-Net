@@ -211,19 +211,66 @@ class lmfcaNet(nn.Module):
         out = self.lastConv(d1)
 
         return out
-if __name__ == "__main__":
-    # Create a test input tensor (batch_size=2, channels=2, height=128, width=128)
-    test_input = torch.randn(2, 2, 256, 256)
+
+
+ # 音频输入: [B, 2, L]
+def wav2spec(wav, n_fft=510, hop=128, win_len=510):
+    stft = lambda x: torch.stft(
+        x, n_fft=n_fft, hop_length=hop, win_length=win_len,
+        return_complex=True, center=True, normalized=False
+    )
+    specs = [stft(wav[:, i]) for i in range(2)]
+    specs = torch.stack(specs, dim=1)  # [B, 2, F, T]
+    real_imag = torch.view_as_real(specs)  # [B, 2, F, T, 2]
+    real_imag = real_imag.permute(0, 1, 4, 2, 3)  # [B, 2, 2, F, T]
+    real_imag = real_imag.reshape(wav.shape[0], 2 * 2, specs[0].shape[-2], specs[0].shape[-1])  # [B, 4, F, T]
+    return real_imag
+
+
+# 模型输出: [B, 2, F, T] -> complex tensor
+def spec2wav(output, n_fft=510, hop=128, win_len=510, length=None):
+    real, imag = output[:, 0], output[:, 1]  # [B, F, T]
+    spec = torch.complex(real, imag)  # [B, F, T]
+    wav = torch.istft(
+        spec,
+        n_fft=n_fft,
+        hop_length=hop,
+        win_length=win_len,
+        center=True,
+        normalized=False,
+        length=length
+    )
+    wav = wav.unsqueeze(1) # [B T] ==> [B C=1 T]
+    return wav
+
+
+def test_lmfcaNet():
+    # B C=2 T
+    noisy_2ch_wav = torch.randn(16, 2, 16256)
+    print(f"noisy_2ch_wav.shape: {noisy_2ch_wav.shape}") # torch.Size([1, 2, 16256])
+    noisy_2ch_spec = wav2spec(noisy_2ch_wav)
+    print(f"noisy_2ch_spec.shape: {noisy_2ch_spec.shape}") # torch.Size([1, 4, 256, 128])
 
     # Initialize the model
-    model = lmfcaNet(in_ch=2, out_ch=1)
+    model = lmfcaNet(in_ch=4, out_ch=2)
 
     # Forward pass
-    output = model(test_input)
+    est_spec = model(noisy_2ch_spec)
 
-    # Print input and output shapes
-    print(f"Input shape: {test_input.shape}")
-    print(f"Output shape: {output.shape}")
+    est_1ch_wav = spec2wav(est_spec)
+    print(f"est_1ch_wav.shape: {est_1ch_wav.shape}") # [B C=1 T] torch.Size([16, 1, 16256])
 
-    # Print min/max values of output
-    print(f"Output min: {output.min().item():.4f}, max: {output.max().item():.4f}")
+
+def test_model_complexity_info():
+    from ptflops import get_model_complexity_info
+    nnet = lmfcaNet(in_ch=4, out_ch=2)
+    flops, params = get_model_complexity_info(nnet,
+                                              (4, 256, 128),
+                                              as_strings=True,
+                                              print_per_layer_stat=False)
+    print(f'flops:{flops}, params:{params}')
+    # flops:5.72 GMac, params:2.13 M
+
+if __name__ == "__main__":    
+    test_lmfcaNet()
+    test_model_complexity_info()
