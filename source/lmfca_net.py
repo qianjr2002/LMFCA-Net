@@ -268,6 +268,7 @@ def process_variable_length_audio(
             # 模型增强
             with torch.no_grad():
                 enhanced_spec = model(input_spec)
+            # enhanced_spec = model(input_spec)
 
             # ISTFT
             real, imag = enhanced_spec[:, 0], enhanced_spec[:, 1]
@@ -289,7 +290,7 @@ def process_variable_length_audio(
     return outputs
 
 
- # 音频输入: [B, 2, L]
+# 音频输入: [B, 2, L]
 def wav2spec(wav, n_fft=510, hop=128, win_len=510):
     stft = lambda x: torch.stft(
         x, n_fft=n_fft, hop_length=hop, win_length=win_len,
@@ -347,9 +348,8 @@ def test_model_complexity_info():
     print(f'flops:{flops}, params:{params}')
     # flops:5.72 GMac, params:2.13 M
 
-if __name__ == "__main__":    
-    test_lmfcaNet()
-    test_model_complexity_info()
+
+def test_process_variable_length_audio():
     noisy_wav = torch.randn(16, 2, 19345).to("cuda")
     model = lmfcaNet(in_ch=4, out_ch=2).to("cuda")
     model.eval()
@@ -358,3 +358,9 @@ if __name__ == "__main__":
 
     est_wav = process_variable_length_audio(model, noisy_wav, segment_size)
     print(est_wav.shape)  # [16, 1, 19345]
+
+
+if __name__ == "__main__":    
+    test_lmfcaNet()
+    test_model_complexity_info()
+    test_process_variable_length_audio()
